@@ -22,7 +22,8 @@ const SignIn = () => {
         setIsSubmitting(true);
 
         try {
-            await signInWithEmailAndPassword(auth, form.email, form.password);    
+            await signInWithEmailAndPassword(auth, form.email, form.password);
+            router.push({pathname: '/profile'})    
         } catch (error) {
             setIsSubmitting(false);
             console.error('Error signing up:', error.code, error.message);
