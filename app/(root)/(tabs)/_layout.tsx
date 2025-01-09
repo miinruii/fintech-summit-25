@@ -75,6 +75,22 @@ const TabsLayout = () => {
           ),
         }}
       />
+      <Tabs.Screen
+          name='details'
+          options={{
+            title: 'details',
+            href: null,
+            headerShown: false,
+          }}
+        />
+        <Tabs.Screen
+          name='xrplService'
+          options={{
+            title: 'xrplService',
+            href: null,
+            headerShown: false,
+          }}
+        />
     </Tabs>
   );
 };

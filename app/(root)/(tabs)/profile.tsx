@@ -1,32 +1,29 @@
-import { View, Text, ScrollView, Image, TouchableOpacity, Alert } from 'react-native';
+import 'react-native-get-random-values';
+const crypto = require('crypto-js');
+import * as xrpl from 'xrpl';
+
+import { View, Text, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import React, { useState, useEffect } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {router} from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
-
+import { router } from 'expo-router';
 import FormField from '@/components/FormField';
 import Button from '@/components/Button';
-import { auth, db, storage} from '@/firebase.config';
-import { doc, setDoc, getDoc, deleteDoc, collection } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import ImageViewer from '@/components/ImageViewer';
-import icons from "@/constants/icons";
-
+import { auth, db } from '@/firebase.config';
+import { doc, setDoc, getDoc } from "firebase/firestore";
 
 const Profile = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [profile, setProfile] = useState({ username: '', email: '', contact: '' });
+  const [wallet, setWallet] = useState(null);
+  const [balance, setBalance] = useState(null);
+  const [client, setClient] = useState(null);
 
-  const [profile, setProfile] = useState({
-    username: '',
-    email: '',
-    contact: '',
-  });
-  
   useEffect(() => {
+    // Fetch user profile data
     const fetchUserProfile = async () => {
       const user = auth.currentUser;
       if (user) {
-        const userDocRef = doc(collection(db, "users"), user.uid);
+        const userDocRef = doc(db, "users", user.uid);
         const userDoc = await getDoc(userDocRef);
         if (userDoc.exists()) {
           const userData = userDoc.data();
@@ -35,13 +32,31 @@ const Profile = () => {
             email: userData.email || '',
             contact: userData.contact || '',
           });
+
+          // Load wallet from Firestore
+          if (userData.wallet) {
+            setWallet(userData.wallet);
+          }
         }
       }
     };
 
+    // Connect to XRPL
+    const connectToXRPL = async () => {
+      const newClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233'); // Testnet
+      await newClient.connect();
+      setClient(newClient);
+    };
+
     fetchUserProfile();
+    connectToXRPL();
+
+    return () => {
+      if (client) client.disconnect();
+    };
   }, []);
 
+  // Save Profile Data
   const saveProfile = async () => {
     setIsSubmitting(true);
     try {
@@ -50,14 +65,12 @@ const Profile = () => {
         const updatedProfile = {
           ...profile,
           email: user.email,
+          wallet: wallet ? wallet.classicAddress : null, // Save wallet address
         };
 
-        const userDocRef = doc(collection(db, "users"), user.uid);
+        const userDocRef = doc(db, "users", user.uid);
         await setDoc(userDocRef, updatedProfile);
-        console.log('Profile saved:', updatedProfile);
-        Alert.alert('Profile saved successfully!')
-      } else {
-        console.error('User not authenticated');
+        Alert.alert('Profile saved successfully!');
       }
     } catch (error) {
       console.error('Error saving profile:', error);
@@ -65,88 +78,78 @@ const Profile = () => {
       setIsSubmitting(false);
     }
   };
-  const deleteProfile = async () => {
+
+  // Create New Wallet
+  const createNewWallet = async () => {
+    console.log('Create Wallet button pressed'); // Debugging step
     try {
-      const user = auth.currentUser;
-      if (user) {
-        // Delete user data from Firestore
-        const userDocRef = doc(collection(db, "users"), user.uid);
-        await deleteDoc(userDocRef);
-  
-        // Delete user authentication entry
-        await user.delete();
-  
-        console.log('Profile deleted successfully');
-        Alert.alert('Profile deleted successfully!');
-  
-        // Redirect user to a different screen or log them out
-        router.push('/sign-up'); // Adjust the route as needed
-      } else {
-        console.error('User not authenticated');
-      }
+      const newWallet = xrpl.Wallet.generate();
+      setWallet(newWallet);
+      Alert.alert('Wallet created!', `Your wallet address is: ${newWallet.classicAddress}`);
     } catch (error) {
-      console.error('Error deleting profile:', error);
+      console.error('Error creating wallet:', error);
+      Alert.alert('Error', 'Failed to create wallet');
     }
   };
 
-  const confirmDeleteProfile = () => {
-    Alert.alert(
-      'Delete Profile',
-      'Are you sure you want to delete your profile? This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: deleteProfile },
-      ]
-    );
+  // Check Wallet Balance
+  const checkBalance = async () => {
+    if (client && wallet) {
+      try {
+        const accountInfo = await client.request({
+          command: 'account_info',
+          account: wallet.classicAddress,
+          ledger_index: 'validated',
+        });
+        setBalance(xrpl.dropsToXrp(accountInfo.result.account_data.Balance));
+      } catch (error) {
+        console.error('Error fetching balance:', error);
+      }
+    }
   };
-  
 
   return (
     <SafeAreaView className="bg-white h-full">
       <ScrollView>
         <View className="w-full h-full justify-start px-4 py-10">
-          <View className='justify-center flex-center items-center'>
-            <Text className="text-primary-300 font-rubik mt-4 text-5xl mb-4">
-              User Profile
-            </Text>
-          </View>
-
-          <View className='border-b border-black'>
-            <FormField
-              title="Username:"
-              value={profile.username}
-              handleChangeText={(e) => setProfile({ ...profile, username: e })}
-              otherStyles="mt-4 mb-4"
-              placeholder="username"
-            />
-          </View>
-
-          <View className='border-b border-black'>
-            <Text className="text-black font-rubik mt-4 text-base mb-4">
-              Email: {auth.currentUser.email}
-            </Text>
-          </View>
-
-          <View className='border-b border-black'>
-            <FormField
-              title="Contact Number:"
-              value={profile.contact}
-              handleChangeText={(e) => setProfile({ ...profile, contact: e })}
-              keyboardType='phone-pad'
-              otherStyles="mt-4 mb-4"
-              placeholder="number"
-            />
-          </View>
-
-        <TouchableOpacity
-          onPress={() => router.push({ pathname: 'viewyourposts', params: { userId: auth.currentUser.uid } })}
-          activeOpacity={0.7}
-          className={`mt-10 bg-primary-300 rounded-xl min-h-[62px] justify-center items-center  `}
-        >
-          <Text className={`text-white font-rubik `}>
-            View your posts
+          <Text className="text-primary-300 font-rubik mt-4 text-5xl mb-4">
+            User Profile
           </Text>
-        </TouchableOpacity>
+
+          <FormField
+            title="Username:"
+            value={profile.username}
+            handleChangeText={(e) => setProfile({ ...profile, username: e })}
+            placeholder="Enter your username"
+          />
+
+          <Text className="text-black mt-4">Email: {auth.currentUser.email}</Text>
+
+          <FormField
+            title="Contact Number:"
+            value={profile.contact}
+            handleChangeText={(e) => setProfile({ ...profile, contact: e })}
+            keyboardType="phone-pad"
+            placeholder="Enter your contact number"
+          />
+
+          {wallet ? (
+            <View>
+              <Text className="mt-4">Wallet Address: {wallet.classicAddress}</Text>
+              <Text className="mt-4">Balance: {balance || 'Fetching...'}</Text>
+              <Button
+                title="Check Balance"
+                handlePress={checkBalance}
+                containerStyles="mt-4 bg-primary-400 p-3 rounded-xl"
+              />
+            </View>
+          ) : (
+            <Button
+              title="Create Wallet"
+              handlePress={createNewWallet}
+              containerStyles="mt-4 bg-primary-400 p-3 rounded-xl"
+            />
+          )}
 
           <Button
             title="Save Profile"
@@ -155,18 +158,10 @@ const Profile = () => {
             textStyles="text-white"
             isLoading={isSubmitting}
           />
-
-          <TouchableOpacity onPress={confirmDeleteProfile} className="mt-7 bg-danger p-3 rounded-xl min-h-[62px] justify-center items-center">
-            <Text className="font-pbold text-white text-center">Delete Profile</Text>
-          </TouchableOpacity>
-
-
-          
-
         </View>
       </ScrollView>
     </SafeAreaView>
   );
-}
+};
 
 export default Profile;
