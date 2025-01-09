@@ -2,14 +2,14 @@ import 'react-native-get-random-values';
 const crypto = require('crypto-js');
 import * as xrpl from 'xrpl';
 
-import { View, Text, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, Alert } from 'react-native';
 import React, { useState, useEffect } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import FormField from '@/components/FormField';
-import Button from '@/components/Button';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth, db } from '@/firebase.config';
 import { doc, setDoc, getDoc } from "firebase/firestore";
+import FormField from '@/components/FormField';
+import Button from '@/components/Button';
 
 const Profile = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -18,13 +18,37 @@ const Profile = () => {
   const [balance, setBalance] = useState(null);
   const [client, setClient] = useState(null);
 
+  // 🔹 Initialize XRPL Client
   useEffect(() => {
-    // Fetch user profile data
+    const connectToXRPL = async () => {
+      try {
+        const newClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233');
+        await newClient.connect();
+        setClient(newClient);
+        console.log("✅ Connected to XRPL Testnet.");
+      } catch (error) {
+        console.error("❌ Error connecting to XRPL:", error);
+      }
+    };
+
+    connectToXRPL();
+
+    return () => {
+      if (client) {
+        client.disconnect();
+        console.log("🔌 Disconnected from XRPL Testnet.");
+      }
+    };
+  }, []);
+
+  // 🔹 Fetch User Profile
+  useEffect(() => {
     const fetchUserProfile = async () => {
       const user = auth.currentUser;
       if (user) {
         const userDocRef = doc(db, "users", user.uid);
         const userDoc = await getDoc(userDocRef);
+
         if (userDoc.exists()) {
           const userData = userDoc.data();
           setProfile({
@@ -35,28 +59,69 @@ const Profile = () => {
 
           // Load wallet from Firestore
           if (userData.wallet) {
-            setWallet(userData.wallet);
+            setWallet(userData.wallet); // Public wallet details
+          }
+
+          // Load wallet locally
+          const storedWallet = await loadWalletLocally(user.uid);
+          if (storedWallet) {
+            setWallet((prev) => ({
+              ...prev,
+              ...storedWallet, // Merge sensitive wallet details
+            }));
           }
         }
       }
     };
 
-    // Connect to XRPL
-    const connectToXRPL = async () => {
-      const newClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233'); // Testnet
-      await newClient.connect();
-      setClient(newClient);
-    };
-
     fetchUserProfile();
-    connectToXRPL();
-
-    return () => {
-      if (client) client.disconnect();
-    };
   }, []);
 
-  // Save Profile Data
+  // 🔹 Save Wallet Locally (User-Specific)
+  const saveWalletLocally = async (uid, wallet) => {
+    try {
+      await AsyncStorage.setItem(
+        `user_wallet_${uid}`,
+        JSON.stringify({
+          seed: wallet.seed,
+          privateKey: wallet.privateKey,
+          classicAddress: wallet.classicAddress,
+          publicKey: wallet.publicKey,
+        })
+      );
+      console.log(`✅ Wallet saved locally for user: ${uid}`);
+    } catch (error) {
+      console.error('❌ Error saving wallet locally:', error);
+    }
+  };
+
+  // 🔹 Load Wallet Locally (User-Specific)
+  const loadWalletLocally = async (uid) => {
+    try {
+      const walletData = await AsyncStorage.getItem(`user_wallet_${uid}`);
+      if (walletData) {
+        const wallet = JSON.parse(walletData);
+
+        // Validate the wallet
+        try {
+          const validatedWallet = xrpl.Wallet.fromSeed(wallet.seed);
+          console.log(`✅ Valid wallet loaded for user: ${uid}`, validatedWallet);
+          return wallet;
+        } catch (validationError) {
+          console.error("❌ Invalid wallet data:", validationError);
+          Alert.alert("Error", "Invalid wallet data found. Please recreate your wallet.");
+          return null;
+        }
+      }
+      console.warn(`⚠️ No wallet found for user: ${uid}`);
+      return null;
+    } catch (error) {
+      console.error('❌ Error loading wallet locally:', error);
+      return null;
+    }
+  };
+
+  // 🔹 Save Profile to Firestore
   const saveProfile = async () => {
     setIsSubmitting(true);
     try {
@@ -66,70 +131,85 @@ const Profile = () => {
           ...profile,
           email: user.email,
           wallet: wallet ? {
-            classicAddress: wallet.classicAddress,
-            classicPublicKey: wallet.publicKey,
-            seed: wallet.seed,
-          } : null, // Save wallet details
+            classicAddress: wallet.classicAddress, // Public wallet details
+            publicKey: wallet.publicKey,
+          } : null,
         };
-  
+
         const userDocRef = doc(db, "users", user.uid);
         await setDoc(userDocRef, updatedProfile);
         Alert.alert('Profile saved successfully!');
       }
     } catch (error) {
-      console.error('Error saving profile:', error);
+      console.error('❌ Error saving profile:', error);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Create New Wallet
+  // 🔹 Create New Wallet
   const createNewWallet = async () => {
-    console.log('Create Wallet button pressed'); // Debugging step
+    console.log('⚙️ Creating new wallet...');
     try {
-      const newWallet = xrpl.Wallet.generate();
-      setWallet(newWallet);
-      Alert.alert('Wallet created!', `Your wallet address is: ${newWallet.classicAddress}`);
-      
-      // Display wallet details in the UI
-      setWallet({
-        ...newWallet,
-        publicKey: newWallet.publicKey, // Add the public key
-        seed: newWallet.seed, // Add the seed
-      });
-
-      // Save wallet details to Firestore
       const user = auth.currentUser;
-      if (user) {
-        const userDocRef = doc(db, "users", user.uid);
-        await setDoc(userDocRef, {
-          wallet: {
-            classicAddress: newWallet.classicAddress,
-            classicPublicKey: newWallet.publicKey,
-            seed: newWallet.seed,
-          },
-        }, { merge: true });
+      if (!user) {
+        Alert.alert("Error", "User not logged in.");
+        return;
       }
 
+      // Check if a wallet already exists
+      const existingWallet = await AsyncStorage.getItem(`user_wallet_${user.uid}`);
+      if (existingWallet) {
+        Alert.alert("Wallet Exists", "A wallet already exists for this user.");
+        console.log("❌ Wallet already exists:", existingWallet);
+        return;
+      }
+
+      // Create a new wallet
+      const newWallet = xrpl.Wallet.generate();
+      setWallet(newWallet);
+
+      // Save wallet locally
+      await saveWalletLocally(user.uid, newWallet);
+
+      // Save public wallet details to Firestore
+      const userDocRef = doc(db, "users", user.uid);
+      await setDoc(userDocRef, {
+        wallet: {
+          classicAddress: newWallet.classicAddress,
+          publicKey: newWallet.publicKey,
+        },
+      }, { merge: true });
+
+      Alert.alert('Wallet created!', `Your wallet address is: ${newWallet.classicAddress}`);
     } catch (error) {
-      console.error('Error creating wallet:', error);
+      console.error('❌ Error creating wallet:', error);
       Alert.alert('Error', 'Failed to create wallet');
     }
   };
 
-  // Check Wallet Balance
+  // 🔹 Check Wallet Balance
   const checkBalance = async () => {
-    if (client && wallet) {
-      try {
-        const accountInfo = await client.request({
-          command: 'account_info',
-          account: wallet.classicAddress,
-          ledger_index: 'validated',
-        });
-        setBalance(xrpl.dropsToXrp(accountInfo.result.account_data.Balance));
-      } catch (error) {
-        console.error('Error fetching balance:', error);
-      }
+    if (!client || !wallet) {
+      Alert.alert("Error", "Please ensure the wallet and client are loaded.");
+      return;
+    }
+
+    try {
+      console.log(`🔍 Fetching balance for: ${wallet.classicAddress}`);
+      
+      const accountInfo = await client.request({
+        command: "account_info",
+        account: wallet.classicAddress,
+        ledger_index: "validated",
+      });
+
+      const balanceInXRP = xrpl.dropsToXrp(accountInfo.result.account_data.Balance);
+      setBalance(balanceInXRP);
+      Alert.alert("Balance Retrieved", `Your wallet balance is ${balanceInXRP} XRP`);
+    } catch (error) {
+      console.error("❌ Error fetching balance:", error);
+      Alert.alert("Error", "Could not retrieve balance.");
     }
   };
 
@@ -148,7 +228,7 @@ const Profile = () => {
             placeholder="Enter your username"
           />
 
-          <Text className="text-black mt-4">Email: {auth.currentUser.email}</Text>
+          <Text className="text-black mt-4">Email: {auth.currentUser?.email}</Text>
 
           <FormField
             title="Contact Number:"
@@ -161,15 +241,18 @@ const Profile = () => {
           {wallet ? (
             <View>
               <Text className="mt-4">Wallet Address: {wallet.classicAddress}</Text>
-              <Text className="mt-4">Public Key: {wallet.publicKey}</Text> {/* Display public key */}
-              <Text className="mt-4">Wallet Seed: {wallet.seed}</Text> {/* Display wallet seed */}
-              <Text className="mt-4">Balance: {balance || 'Fetching...'}</Text>
+              <Text className="mt-4">Public Key: {wallet.publicKey}</Text>
+              <Text className="mt-4">
+                Balance: {balance ?? 'Fetching...'} <Text className="font-rubik">XRP</Text>
+              </Text>
               <Button
                 title="Check Balance"
+                textStyles="text-white"
                 handlePress={checkBalance}
                 containerStyles="mt-4 bg-primary-400 p-3 rounded-xl"
               />
             </View>
+          
           ) : (
             <Button
               title="Create Wallet"

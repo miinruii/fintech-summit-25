@@ -1,18 +1,85 @@
-import { View, Text, ActivityIndicator, ScrollView, TextInput, Button, Alert, Image } from 'react-native';
+import 'react-native-get-random-values';
+const crypto = require('crypto-js');
+import * as xrpl from 'xrpl';
+
+import { View, Text, ActivityIndicator, ScrollView, Alert, Image, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute } from '@react-navigation/native';
 import { useState, useEffect } from 'react';
+import { auth, db } from '@/firebase.config'; // Ensure Firebase auth is imported
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '@/firebase.config';
+import Button from '@/components/Button';
+
+// Utility function for dynamic wallet reconstruction and signing
+const demoSignTransaction = (preparedTx, wallet) => {
+  if (!wallet || !wallet.seed) {
+    throw new Error("Invalid wallet object: Seed is required for signing.");
+  }
+  const validWallet = xrpl.Wallet.fromSeed(wallet.seed); // Reconstruct dynamically
+  return validWallet.sign(preparedTx);
+};
 
 const ListingDetails = () => {
+  const ownerAddress = "rfW1HYHhj5Ahs2wm7Anms2BSc1msAehxfv";
+
+  if (xrpl.isValidAddress(ownerAddress)) {
+    console.log("✅ Valid owner address:", ownerAddress);
+  } else {
+    console.error("❌ Invalid owner address:", ownerAddress);
+  }
+
   const route = useRoute();
-  const id = (route.params as { id: string })?.id; 
+  const id = (route.params as { id: string })?.id;
 
   const [listing, setListing] = useState<Record<string, any> | null>(null);
-  const [bid, setBid] = useState(""); // New state for bid input
-  const [loading, setLoading] = useState(false); // For bid submission
+  const [bid, setBid] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [wallet, setWallet] = useState(null);
+  const [client, setClient] = useState<xrpl.Client | null>(null);
 
+  // 🔹 Initialize Wallet and Client
+  useEffect(() => {
+    const initializeXRPL = async () => {
+      try {
+        const newClient = new xrpl.Client("wss://s.altnet.rippletest.net:51233");
+        await newClient.connect();
+        setClient(newClient);
+        console.log("✅ Connected to XRPL Testnet.");
+
+        // Load wallet for the current user
+        const user = auth.currentUser;
+        if (!user) {
+          Alert.alert("Error", "User not logged in.");
+          return;
+        }
+
+        const storedWallet = await AsyncStorage.getItem(`user_wallet_${user.uid}`);
+        if (storedWallet) {
+          const parsedWallet = JSON.parse(storedWallet);
+          console.log("✅ Loaded wallet for user:", parsedWallet);
+          setWallet(parsedWallet);
+        } else {
+          console.error("❌ Wallet not found for the current user.");
+          Alert.alert("Error", "No wallet found. Please create a wallet in your profile.");
+        }
+      } catch (error) {
+        console.error("❌ Error initializing XRPL:", error);
+        Alert.alert("Error", "Failed to initialize XRPL client and wallet.");
+      }
+    };
+
+    initializeXRPL();
+
+    return () => {
+      if (client) {
+        client.disconnect();
+        console.log("🔌 Disconnected from XRPL Testnet.");
+      }
+    };
+  }, []);
+
+  // 🔹 Fetch Listing Details
   useEffect(() => {
     if (!id) {
       console.error("❌ No ID provided to fetch listing details");
@@ -21,13 +88,12 @@ const ListingDetails = () => {
 
     const fetchListingDetails = async () => {
       try {
-        console.log(`🔍 Fetching listing for ID: ${id}`);
         const docRef = doc(db, "listings", id);
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
-          console.log("✅ Listing found:", docSnap.data());
           setListing(docSnap.data());
+          console.log("✅ Listing fetched:", docSnap.data());
         } else {
           console.log("❌ No such document in Firestore!");
         }
@@ -39,29 +105,145 @@ const ListingDetails = () => {
     fetchListingDetails();
   }, [id]);
 
-  // 🔹 Function to handle bid submission
-  const placeBid = async () => {
-    if (!listing || !id) return;
-    const bidAmount = parseFloat(bid);
+  // 🔹 Check if Account is Activated
+  const checkAccountActivated = async () => {
+    if (!wallet || !client) {
+      console.error("❌ Wallet or client not initialized.");
+      Alert.alert("Error", "Ensure the wallet and client are initialized.");
+      return false;
+    }
 
-    if (isNaN(bidAmount) || bidAmount <= listing.currentBid) {
-      Alert.alert("Invalid Bid", "Your bid must be higher than the current bid.");
+    try {
+      const accountInfo = await client.request({
+        command: "account_info",
+        account: wallet.classicAddress,
+      });
+      console.log("✅ Account is active:", accountInfo);
+      return true;
+    } catch (error) {
+      if (error.data?.error === "actNotFound") {
+        console.error(`❌ Account not found: ${wallet.classicAddress}. Please fund the wallet.`);
+        Alert.alert(
+          "Account Not Found",
+          `The account ${wallet.classicAddress} is not activated. Please fund it with the Testnet XRP Faucet and try again.`
+        );
+      } else {
+        console.error(`❌ Error checking account activation for ${wallet.classicAddress}:`, error);
+        Alert.alert(
+          "Error",
+          `Failed to check activation for account ${wallet.classicAddress}. Please try again later.`
+        );
+      }
+      return false;
+    }
+  };
+
+  // 🔹 Handle Buy Now
+  const handleBuyNow = async () => {
+    if (!listing || !id || !wallet || !client) {
+      Alert.alert("Error", "Ensure the listing, wallet, and client are initialized.");
       return;
     }
 
-    setLoading(true);
+    if (!await checkAccountActivated()) return;
+
+    const buyNowPrice = listing.currentBid > 0 ? listing.currentBid * 1.5 : listing.startingBid * 1.5;
+
     try {
-      const docRef = doc(db, "listings", id);
-      await updateDoc(docRef, { currentBid: bidAmount });
+      setLoading(true);
 
-      // Update local state immediately
-      setListing((prev) => ({ ...prev, currentBid: bidAmount }));
-      setBid(""); // Clear input
+      const buyNowPriceInDrops = xrpl.xrpToDrops(buyNowPrice);
 
-      Alert.alert("Success", "Your bid has been placed!");
+      const preparedTx = await client.autofill({
+        TransactionType: "Payment",
+        Account: wallet.classicAddress,
+        Amount: buyNowPriceInDrops,
+        Destination: ownerAddress, // Seller's XRP wallet
+      });
+
+      // Use demoSignTransaction to dynamically reconstruct and sign
+      const signedTx = demoSignTransaction(preparedTx, wallet);
+
+      const result = await client.submitAndWait(signedTx.tx_blob);
+
+      if (result.result.meta.TransactionResult === "tesSUCCESS") {
+        Alert.alert(
+          "Success",
+          `Purchase completed! Transaction Hash: ${result.result.hash}`
+        );
+
+        const docRef = doc(db, "listings", id);
+        await updateDoc(docRef, { status: "sold" });
+
+        console.log("Purchase successful:", result);
+      } else {
+        Alert.alert(
+          "Transaction Failed",
+          `Error: ${result.result.meta.TransactionResult} for account ${wallet.classicAddress}`
+        );
+      }
     } catch (error) {
-      console.error("❌ Error placing bid:", error);
-      Alert.alert("Error", "Failed to place bid.");
+      console.error(`❌ Error processing XRPL transaction for account ${wallet.classicAddress}:`, error);
+      Alert.alert(
+        "Error",
+        `Failed to complete the purchase for account ${wallet.classicAddress}. Please try again.`
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🔹 Handle Bid
+  const handleBid = async () => {
+    if (!listing || !id || !wallet || !client) {
+      Alert.alert("Error", "Ensure the listing, wallet, and client are initialized.");
+      return;
+    }
+
+    if (!await checkAccountActivated()) return;
+
+    const bidAmount = parseFloat(bid);
+    if (isNaN(bidAmount) || bidAmount <= listing.currentBid) {
+      Alert.alert("Error", "Your bid must be higher than the current bid.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const bidInDrops = xrpl.xrpToDrops(bidAmount);
+
+      const preparedTx = await client.autofill({
+        TransactionType: "Payment",
+        Account: wallet.classicAddress,
+        Amount: bidInDrops,
+        Destination: ownerAddress, // Seller's XRP wallet
+      });
+
+      // Use demoSignTransaction to dynamically reconstruct and sign
+      const signedTx = demoSignTransaction(preparedTx, wallet);
+
+      const result = await client.submitAndWait(signedTx.tx_blob);
+
+      if (result.result.meta.TransactionResult === "tesSUCCESS") {
+        Alert.alert("Success", `Bid placed successfully! Transaction Hash: ${result.result.hash}`);
+
+        const docRef = doc(db, "listings", id);
+        await updateDoc(docRef, { currentBid: bidAmount });
+
+        console.log("Bid placed successfully:", result);
+      } else {
+        Alert.alert(
+          "Transaction Failed",
+          `Error: ${result.result.meta.TransactionResult} for account ${wallet.classicAddress}`
+        );
+      }
+    } catch (error) {
+      console.error(`❌ Error placing bid for account ${wallet.classicAddress}:`, error);
+      Alert.alert(
+        "Error",
+        `Failed to place the bid for account ${wallet.classicAddress}. Please try again.`
+      );
     } finally {
       setLoading(false);
     }
@@ -69,11 +251,12 @@ const ListingDetails = () => {
 
   if (!listing) return <ActivityIndicator size="large" color="#0000ff" />;
 
+  const buyNowPrice = listing.currentBid > 0 ? listing.currentBid * 1.5 : listing.startingBid * 1.5;
+
   return (
     <SafeAreaView className="bg-white h-full">
       <ScrollView>
         <View className="w-full h-full justify-start px-4 py-10">
-          {/* Display the image */}
           {listing.image && (
             <Image
               source={{ uri: listing.image }}
@@ -81,23 +264,42 @@ const ListingDetails = () => {
             />
           )}
 
-          <View className='justify-center items-center'>
-            <Text className="text-primary-300 font-rubik mt-4 text-sm mb-4">ID: {id}</Text>
-            <Text className="text-primary-400 font-rubik-bold mt-4 text-3xl mb-4">Name: {listing.name} </Text>
-            <Text className="text-primary-300 font-rubik mt-4 text-2xl mb-4">Starting Bid: ${listing.startingBid}</Text>
-            <Text className="text-danger font-rubik-bold mt-4 text-2xl mb-4">Current Bid: ${listing.currentBid}</Text>
+          <View className="justify-center items-center">
+            <Text className="text-primary-400 font-rubik-bold mt-4 text-3xl mb-4">Name: {listing.name}</Text>
+          </View>
+          <View className="justify-center ml-6">
+            <Text className="text-primary-300 font-rubik mt-4 text-2xl">Starting Bid: {listing.startingBid} XRP</Text>
+            <Text className="text-danger font-rubik-bold mt-4 text-2xl">Current Bid: {listing.currentBid} XRP</Text>
+            <Text className="text-green-500 font-rubik-bold mt-4 text-2xl">Buy Now Price: {buyNowPrice.toFixed(2)} XRP</Text>
           </View>
 
-          <View className="justify-center items-center mt-6">
-            <Text className="text-2xl font-bold mb-2">Place Your Bid</Text>
-            <TextInput 
-              className="border border-gray-300 rounded-md p-2 w-60 text-center" 
+          <View className="mt-6">
+            <Button
+              title={`Buy Now for ${buyNowPrice.toFixed(2)} XRP`}
+              handlePress={handleBuyNow}
+              containerStyles="mt-7 bg-primary-400 p-3 rounded-xl"
+              textStyles="text-white"
+              disabled={loading}
+            />
+            {loading && <ActivityIndicator size="large" color="#0000ff" style={{ marginTop: 10 }} />}
+          </View>
+
+          <View className="mt-6">
+            <TextInput
               placeholder="Enter your bid amount"
-              keyboardType="numeric"
               value={bid}
               onChangeText={setBid}
+              keyboardType="numeric"
+              style={{ padding: 10, borderWidth: 1, borderColor: '#ccc', borderRadius: 5 }}
             />
-            <Button title={loading ? "Placing Bid..." : "Submit Bid"} onPress={placeBid} disabled={loading} />
+            <Button
+              title="Place Bid"
+              handlePress={handleBid}
+              containerStyles="mt-7 bg-primary-400 p-3 rounded-xl"
+              textStyles="text-white"
+              disabled={loading || !bid}
+            />
+            {loading && <ActivityIndicator size="large" color="#0000ff" style={{ marginTop: 10 }} />}
           </View>
         </View>
       </ScrollView>

@@ -11,28 +11,35 @@ const Buy = () => {
   const [refreshing, setRefreshing] = useState(false); // Track refresh state
   const router = useRouter(); // Initialize the router
 
-  // 🔹 Fetch listings from Firestore
   const fetchListings = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "listings"));
       const data = querySnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
+        // Default status to "available for bidding" if not set in Firestore
+        status: doc.data().status || "available for bidding", 
       }));
-      setListings(data);
+
+      // Sort items: available items come first, sold items at the bottom
+      const sortedData = data.sort((a, b) => {
+        if (a.status === "sold" && b.status !== "sold") return 1;
+        if (a.status !== "sold" && b.status === "sold") return -1;
+        return 0; // Keep the order for items with the same status
+      });
+
+      setListings(sortedData);
     } catch (error) {
       console.error("Error fetching listings:", error);
     }
   };
 
-  // 🔹 Function to handle pull-to-refresh
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchListings(); // Fetch updated data
+    await fetchListings(); 
     setRefreshing(false);
   }, []);
 
-  // 🔹 Fetch listings on mount
   useEffect(() => {
     fetchListings();
   }, []);
