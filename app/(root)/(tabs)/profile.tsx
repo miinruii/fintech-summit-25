@@ -65,9 +65,13 @@ const Profile = () => {
         const updatedProfile = {
           ...profile,
           email: user.email,
-          wallet: wallet ? wallet.classicAddress : null, // Save wallet address
+          wallet: wallet ? {
+            classicAddress: wallet.classicAddress,
+            classicPublicKey: wallet.publicKey,
+            seed: wallet.seed,
+          } : null, // Save wallet details
         };
-
+  
         const userDocRef = doc(db, "users", user.uid);
         await setDoc(userDocRef, updatedProfile);
         Alert.alert('Profile saved successfully!');
@@ -86,6 +90,27 @@ const Profile = () => {
       const newWallet = xrpl.Wallet.generate();
       setWallet(newWallet);
       Alert.alert('Wallet created!', `Your wallet address is: ${newWallet.classicAddress}`);
+      
+      // Display wallet details in the UI
+      setWallet({
+        ...newWallet,
+        publicKey: newWallet.publicKey, // Add the public key
+        seed: newWallet.seed, // Add the seed
+      });
+
+      // Save wallet details to Firestore
+      const user = auth.currentUser;
+      if (user) {
+        const userDocRef = doc(db, "users", user.uid);
+        await setDoc(userDocRef, {
+          wallet: {
+            classicAddress: newWallet.classicAddress,
+            classicPublicKey: newWallet.publicKey,
+            seed: newWallet.seed,
+          },
+        }, { merge: true });
+      }
+
     } catch (error) {
       console.error('Error creating wallet:', error);
       Alert.alert('Error', 'Failed to create wallet');
@@ -136,6 +161,8 @@ const Profile = () => {
           {wallet ? (
             <View>
               <Text className="mt-4">Wallet Address: {wallet.classicAddress}</Text>
+              <Text className="mt-4">Public Key: {wallet.publicKey}</Text> {/* Display public key */}
+              <Text className="mt-4">Wallet Seed: {wallet.seed}</Text> {/* Display wallet seed */}
               <Text className="mt-4">Balance: {balance || 'Fetching...'}</Text>
               <Button
                 title="Check Balance"
