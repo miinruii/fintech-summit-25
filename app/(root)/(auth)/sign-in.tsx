@@ -80,7 +80,7 @@ const SignIn = () => {
 
                     <View className="justify-center pt-5 flex-row gap-1">
                         <Text className="text-md text-black font-rubik">Don't have an account?</Text>
-                        <Link href="/sign-up" className=" underline text-md text-black font-rubik">Sign up now!</Link>
+                        <Link href="/sign-up" className=" underline text-md text-danger font-rubik">Sign up now!</Link>
 
                     </View>
 

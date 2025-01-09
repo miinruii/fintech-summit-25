@@ -47,7 +47,7 @@ const Buy = () => {
   return (
     <SafeAreaView className="bg-white h-full px-4">
       <View className="flex flex-row items-center justify-between">
-        <Text className="text-xl font-rubik-bold text-black-300">Up for Bidding</Text>
+        <Text className="text-4xl font-rubik-bold text-black-300">Up for Bidding</Text>
       </View>
 
       <FlatList

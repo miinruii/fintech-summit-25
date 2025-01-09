@@ -3,7 +3,7 @@ import React, { useState } from 'react'
 const FormField = ({ title, value, placeholder, handleChangeText, otherStyles, keyboardType }) => {
     return (
         <View className={`space-y-2 ${otherStyles}`}>
-            <Text className="text-base text-black font-rubik">{title}</Text>
+            <Text className="underline text-base text-black font-rubik-bold">{title}</Text>
 
             <View className='w-full h-16 px-4 bg-primary-200 rounded-2xl focus:border-black items-center flex-row'>
                 <TextInput 

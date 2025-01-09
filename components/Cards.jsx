@@ -17,6 +17,12 @@ export const Card = ({ item, onPress }: Props) => {
       className="flex-1 w-full mt-4 px-3 py-4 rounded-lg bg-white shadow-lg shadow-black-100/70"
       onPress={onPress}
     >
+      <View className="flex flex-row justify-between mt-1">
+        <Text className="text-sm font-rubik-extrabold text-gray-500 mb-2">
+          {item.name}
+        </Text>
+      </View>
+
       {/* Image */}
       <Image
         source={{ uri: item.image }}

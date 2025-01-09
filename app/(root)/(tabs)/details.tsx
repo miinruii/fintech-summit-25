@@ -193,7 +193,7 @@ const ListingDetails = () => {
     }
   };
 
-  // 🔹 Handle Bid
+  // 🔹 Handle Bid (No money deduction)
   const handleBid = async () => {
     if (!listing || !id || !wallet || !client) {
       Alert.alert("Error", "Ensure the listing, wallet, and client are initialized.");
@@ -213,31 +213,13 @@ const ListingDetails = () => {
 
       const bidInDrops = xrpl.xrpToDrops(bidAmount);
 
-      const preparedTx = await client.autofill({
-        TransactionType: "Payment",
-        Account: wallet.classicAddress,
-        Amount: bidInDrops,
-        Destination: ownerAddress, // Seller's XRP wallet
-      });
+      // Only reflect the bid in the Firestore listing, without reducing the wallet balance.
+      const docRef = doc(db, "listings", id);
+      await updateDoc(docRef, { currentBid: bidAmount });
 
-      // Use demoSignTransaction to dynamically reconstruct and sign
-      const signedTx = demoSignTransaction(preparedTx, wallet);
+      Alert.alert("Success", `Bid placed successfully! Your bid: ${bidAmount} XRP`);
 
-      const result = await client.submitAndWait(signedTx.tx_blob);
-
-      if (result.result.meta.TransactionResult === "tesSUCCESS") {
-        Alert.alert("Success", `Bid placed successfully! Transaction Hash: ${result.result.hash}`);
-
-        const docRef = doc(db, "listings", id);
-        await updateDoc(docRef, { currentBid: bidAmount });
-
-        console.log("Bid placed successfully:", result);
-      } else {
-        Alert.alert(
-          "Transaction Failed",
-          `Error: ${result.result.meta.TransactionResult} for account ${wallet.classicAddress}`
-        );
-      }
+      console.log("Bid placed successfully, but no wallet deduction:", bidAmount);
     } catch (error) {
       console.error(`❌ Error placing bid for account ${wallet.classicAddress}:`, error);
       Alert.alert(
@@ -265,10 +247,10 @@ const ListingDetails = () => {
           )}
 
           <View className="justify-center items-center">
-            <Text className="text-primary-400 font-rubik-bold mt-4 text-3xl mb-4">Name: {listing.name}</Text>
+            <Text className="text-black font-rubik-bold mt-4 text-3xl mb-4">Name: {listing.name}</Text>
           </View>
           <View className="justify-center ml-6">
-            <Text className="text-primary-300 font-rubik mt-4 text-2xl">Starting Bid: {listing.startingBid} XRP</Text>
+            <Text className="text-primary-300 font-rubik-bold mt-4 text-2xl">Starting Bid: {listing.startingBid} XRP</Text>
             <Text className="text-danger font-rubik-bold mt-4 text-2xl">Current Bid: {listing.currentBid} XRP</Text>
             <Text className="text-green-500 font-rubik-bold mt-4 text-2xl">Buy Now Price: {buyNowPrice.toFixed(2)} XRP</Text>
           </View>
@@ -285,13 +267,20 @@ const ListingDetails = () => {
           </View>
 
           <View className="mt-6">
-            <TextInput
-              placeholder="Enter your bid amount"
-              value={bid}
-              onChangeText={setBid}
-              keyboardType="numeric"
-              style={{ padding: 10, borderWidth: 1, borderColor: '#ccc', borderRadius: 5 }}
-            />
+          <TextInput
+            placeholder="Enter your bid amount"
+            value={bid}
+            onChangeText={setBid}
+            keyboardType="numeric"
+            style={{
+              padding: 10,
+              borderWidth: 1,
+              borderColor: '#ccc',
+              borderRadius: 5,
+            }}
+            placeholderTextColor="#888"  // Change this to the desired color
+          />
+
             <Button
               title="Place Bid"
               handlePress={handleBid}

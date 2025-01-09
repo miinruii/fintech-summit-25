@@ -217,7 +217,7 @@ const Profile = () => {
     <SafeAreaView className="bg-white h-full">
       <ScrollView>
         <View className="w-full h-full justify-start px-4 py-10">
-          <Text className="text-primary-300 font-rubik mt-4 text-5xl mb-4">
+          <Text className="text-primary-300 font-rubik-extrabold mt-4 text-5xl mb-4">
             User Profile
           </Text>
 
@@ -228,7 +228,7 @@ const Profile = () => {
             placeholder="Enter your username"
           />
 
-          <Text className="text-black mt-4">Email: {auth.currentUser?.email}</Text>
+          <Text className="text-black mt-7 mb-4">Email: {auth.currentUser?.email}</Text>
 
           <FormField
             title="Contact Number:"
@@ -240,11 +240,13 @@ const Profile = () => {
 
           {wallet ? (
             <View>
-              <Text className="mt-4">Wallet Address: {wallet.classicAddress}</Text>
-              <Text className="mt-4">Public Key: {wallet.publicKey}</Text>
-              <Text className="mt-4">
-                Balance: {balance ?? 'Fetching...'} <Text className="font-rubik">XRP</Text>
-              </Text>
+              <Text className="underline mt-4 font-rubik-bold">Wallet Address: </Text>
+              <Text>{wallet.classicAddress}</Text>
+              <Text className="underline mt-4 font-rubik-bold">Public Key: </Text>
+              <Text>{wallet.publicKey}</Text>
+              <Text className="underline mt-4 font-rubik-bold"> Balance: </Text>
+              <Text className="ml-1">{balance ?? 'Fetching...'} XRP</Text>
+              
               <Button
                 title="Check Balance"
                 textStyles="text-white"
