@@ -2,7 +2,7 @@ import 'react-native-get-random-values';
 const crypto = require('crypto-js');
 import * as xrpl from 'xrpl';
 
-import { View, Text, ActivityIndicator, ScrollView, Alert, Image, TextInput } from 'react-native';
+import { View, Text, ActivityIndicator, ScrollView, Alert, Image, TextInput, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute } from '@react-navigation/native';
 import { useState, useEffect } from 'react';
@@ -37,6 +37,7 @@ const ListingDetails = () => {
   const [loading, setLoading] = useState(false);
   const [wallet, setWallet] = useState(null);
   const [client, setClient] = useState<xrpl.Client | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // 🔹 Initialize Wallet and Client
   useEffect(() => {
@@ -79,31 +80,50 @@ const ListingDetails = () => {
     };
   }, []);
 
-  // 🔹 Fetch Listing Details
-  useEffect(() => {
-    if (!id) {
-      console.error("❌ No ID provided to fetch listing details");
-      return;
-    }
+  const fetchListingDetails = async () => {
+    try {
+      if (!id) return;
+      const docRef = doc(db, "listings", id);
+      const docSnap = await getDoc(docRef);
 
-    const fetchListingDetails = async () => {
-      try {
-        const docRef = doc(db, "listings", id);
-        const docSnap = await getDoc(docRef);
-
-        if (docSnap.exists()) {
-          setListing(docSnap.data());
-          console.log("✅ Listing fetched:", docSnap.data());
-        } else {
-          console.log("❌ No such document in Firestore!");
-        }
-      } catch (error) {
-        console.error("❌ Error fetching listing details:", error);
+      if (docSnap.exists()) {
+        setListing(docSnap.data());
+        console.log("✅ Listing fetched:", docSnap.data());
+      } else {
+        console.log("❌ No such document in Firestore!");
       }
-    };
+    } catch (error) {
+      console.error("❌ Error fetching listing details:", error);
+    }
+  };
 
+  // Refresh Handler
+  const handleRefresh = async () => {
+    if (!id) return;
+
+    try {
+      setRefreshing(true);
+      const docRef = doc(db, "listings", id);
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        setListing(docSnap.data());
+        console.log("✅ Listing refreshed:", docSnap.data());
+      } else {
+        console.log("❌ No such document in Firestore!");
+      }
+    } catch (error) {
+      console.error("❌ Error refreshing listing details:", error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
     fetchListingDetails();
   }, [id]);
+
+
 
   // 🔹 Check if Account is Activated
   const checkAccountActivated = async () => {
@@ -193,12 +213,104 @@ const ListingDetails = () => {
     }
   };
 
+  useEffect(() => {
+    if (!listing || !listing.auctionEnd) return;
+
+    const timer = setInterval(async () => {
+      const currentTime = Date.now();
+
+      if (currentTime >= listing.auctionEnd.toMillis()) {
+        clearInterval(timer);
+
+        if (listing.highestBid) {
+          try {
+            console.log("🔔 Auction has ended. Processing for highest bidder...");
+
+            // Mark as sold and process payment
+            await closeBid();
+
+            const docRef = doc(db, "listings", id);
+            await updateDoc(docRef, { status: "sold" });
+
+            Alert.alert("Auction Ended", `The auction has ended, and the winner is ${listing.highestBid}!`);
+          } catch (error) {
+            console.error("❌ Error processing post-auction:", error);
+          }
+        } else {
+          console.log("🔔 Auction ended with no bids.");
+        }
+      }
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [listing]);
+
+
+  const closeBid = async () => {
+    if (!listing || !wallet || !client) {
+      console.error("❌ Ensure the listing, wallet, and client are initialized.");
+      return;
+    }
+  
+    try {
+      console.log(`🔄 Processing payment for listing: ${listing.id}`);
+
+      const buyerWallet = listing.highestBid;
+      const highestBidInDrops = xrpl.xrpToDrops(listing.currentBid); // Convert to drops (smallest XRP unit)
+  
+      // Prepare transaction
+      const preparedTx = await client.autofill({
+        TransactionType: "Payment",
+        Account: buyerWallet, // Seller's wallet
+        Amount: highestBidInDrops,
+        Destination: ownerAddress, // Owner's XRP wallet
+      });
+  
+      // Sign and submit transaction
+      const signedTx = demoSignTransaction(preparedTx, wallet);
+
+      const result = await client.submitAndWait(signedTx.tx_blob);
+  
+      if (result.result.meta.TransactionResult === "tesSUCCESS") {
+        console.log(`✅ Payment successful for listing: ${listing.name}`);
+        console.log(`Transaction Hash: ${result.result.hash}`);
+  
+        // Update Firestore to mark as sold
+        const docRef = doc(db, "listings", listing.id);
+        await updateDoc(docRef, {
+          status: "sold",
+          transactionHash: result.result.hash,
+        });
+  
+        Alert.alert("Success", "The payment has been processed successfully.");
+      } else {
+        console.error(`❌ Payment failed: ${result.result.meta.TransactionResult}`);
+        Alert.alert("Error", `Payment failed: ${result.result.meta.TransactionResult}`);
+      }
+    } catch (error) {
+      console.error("❌ Error during payment processing:", error);
+      Alert.alert("Error", "An error occurred during payment processing. Please try again.");
+    }
+  };
+  
+
   // 🔹 Handle Bid (No money deduction)
   const handleBid = async () => {
     if (!listing || !id || !wallet || !client) {
       Alert.alert("Error", "Ensure the listing, wallet, and client are initialized.");
       return;
     }
+
+    console.log("Before time check");
+    const currentTime = Date.now();;
+    console.log("Current Time:", currentTime);
+    if (currentTime < listing.auctionStart.toMillis() || currentTime > listing.auctionEnd.toMillis()) {
+      Alert.alert("Error", "Bidding is not allowed at this time.");
+      console.log("Time check failed.");
+      return;
+    }
+    console.log("Time check passed.");
+
 
     if (!await checkAccountActivated()) return;
 
@@ -215,7 +327,7 @@ const ListingDetails = () => {
 
       // Only reflect the bid in the Firestore listing, without reducing the wallet balance.
       const docRef = doc(db, "listings", id);
-      await updateDoc(docRef, { currentBid: bidAmount });
+      await updateDoc(docRef, { currentBid: bidAmount, highestBid: wallet.classicAddress });
 
       Alert.alert("Success", `Bid placed successfully! Your bid: ${bidAmount} XRP`);
 
@@ -237,7 +349,9 @@ const ListingDetails = () => {
 
   return (
     <SafeAreaView className="bg-white h-full">
-      <ScrollView>
+      <ScrollView refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }>
         <View className="w-full h-full justify-start px-4 py-10">
           {listing.image && (
             <Image

@@ -55,16 +55,7 @@ const TabsLayout = () => {
           ),
         }}
       />
-      <Tabs.Screen
-        name="sell"
-        options={{
-          title: "Sell",
-          headerShown: false,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon={icons.sell} title="Sell" />
-          ),
-        }}
-      />
+      
       <Tabs.Screen
         name="profile"
         options={{
